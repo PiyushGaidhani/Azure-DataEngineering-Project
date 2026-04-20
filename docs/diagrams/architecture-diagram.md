@@ -9,7 +9,9 @@ flowchart LR
     B --> DB[Azure Databricks\nsilver_layer.ipynb]
     DB --> S[ADLS Gen2\nsilver]
     DB --> G[ADLS Gen2\ngold]
-    S --> SYN[Azure Synapse\nSchema, Views, External Tables]
-    G --> SYN
-    SYN --> C[SQL Consumers\nAnalytics / Reporting]
+    S --> SYNS[Synapse Serverless SQL\nGold Views and External Tables]
+    G --> SYNS
+    SYNS --> DW[Synapse Dedicated SQL Pool\ndwh_ext* / Star Schema]
+    PL[Synapse Pipeline\npl_load_sales_dwh] --> DW
+    DW --> PBI[Power BI\nDirectQuery Reporting]
 ```

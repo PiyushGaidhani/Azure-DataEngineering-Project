@@ -2,13 +2,16 @@
 
 ## Overview
 
-This project implements the medallion architecture on Azure using Azure Data Factory for ingestion, ADLS Gen2 for storage, Azure Databricks for transformation, and Azure Synapse Analytics for SQL-based consumption.
+This project implements an Azure medallion architecture using Azure Data Factory for ingestion, ADLS Gen2 for storage, Azure Databricks for transformation, Azure Synapse Analytics for serverless lake querying, a Synapse dedicated SQL Pool for warehousing, and Power BI for reporting.
 
-The lake is organized into three layers:
+The platform is organized into two connected analytical layers:
 
-- Bronze: raw landed data
-- Silver: cleaned and transformed data
-- Gold: curated analytical data
+- Lakehouse layer
+  Bronze: raw landed data
+  Silver: cleaned and transformed data
+  Gold: curated analytical data stored in Parquet
+- Warehouse layer
+  Dedicated SQL Pool schemas and star-schema tables built on top of the gold layer for reporting and BI consumption
 
 ## End-to-End Flow
 
@@ -33,19 +36,61 @@ Azure Databricks runs `Databricks/silver_layer.ipynb` to process bronze data and
 The `silver` container stores refined intermediate datasets.
 The `gold` container stores curated analytical datasets, typically in Parquet format.
 
-### 6. Consumption
+### 6. Synapse Serverless Layer
 
-Azure Synapse uses the SQL scripts in `Synapse/Scripts/` to create the schema, views, and external tables required to query the final lake data.
+Azure Synapse serverless SQL uses the gold-layer Parquet files to create lake-facing views and external tables.
+
+In this repository, that layer is represented by:
+
+- `Synapse/Scripts/Create Schema.sql`
+- `Synapse/Scripts/Create Views Gold.sql`
+- `Synapse/Scripts/Create External Table.sql`
+
+This layer provides the first SQL-serving surface over the curated gold data.
+
+### 7. Dedicated SQL Pool Warehouse Layer
+
+On top of the Synapse gold layer, the project builds a dedicated SQL Pool warehouse.
+
+This warehouse introduces:
+
+- `dwh`, `rpt`, and `meta` schemas
+- a `dwh_ext*` CETAS ingestion layer
+- schema-aligned external tables for dedicated SQL Pool
+- a star schema with dimensions and fact table
+- stored procedures for repeatable loads
+- a Synapse pipeline for orchestration
+
+In this repository, the warehouse layer is represented by:
+
+- `Synapse/Scripts/Create Schemas dwh.sql`
+- `Synapse/Scripts/Create External Table dwh.sql`
+- `Synapse/Scripts/Create External Tables Dedicated.sql`
+- `Synapse/Scripts/Create Dimensional Model.sql`
+- `Synapse/Scripts/Create Stored Procedure FACT LOAD.sql`
+- `Synapse/Scripts/Reporting views.sql`
+- `Synapse/Pipelines/pl_load_sales_dwh.json`
+
+### 8. BI Consumption
+
+Power BI connects to the Synapse dedicated SQL Pool using DirectQuery and reads from the reporting layer for dashboarding and analytics.
+
+In this repository, the BI asset is:
+
+- `PowerBI/Sales Analytics Dashboard.pbix`
 
 ## Pipeline Narrative
 
 1. GitHub stores the source files.
-2. Azure Data Factory ingests those files dynamically.
-3. Files are copied into ADLS Gen2 bronze storage.
-4. Azure Databricks transforms the bronze data.
-5. Refined outputs are written to silver and gold.
-6. Azure Synapse exposes the final datasets through external tables and views.
-7. Users query the gold layer through SQL.
+2. Azure Data Factory ingests those files dynamically into the ADLS Gen2 bronze layer.
+3. Azure Databricks reads bronze data and writes transformed outputs into the silver and gold layers.
+4. Synapse serverless SQL exposes the gold layer through external tables and views.
+5. A `dwh_ext*` CETAS ingestion layer is created from the curated gold data.
+6. Dedicated SQL Pool external tables are created with schema alignment to fix data type and column order issues.
+7. A star schema is built with dimensions and a fact table inside the `dwh` schema.
+8. Stored procedures and a Synapse pipeline orchestrate repeatable warehouse loads.
+9. A reporting view in the `rpt` schema exposes the analytical model for BI consumption.
+10. Power BI connects through DirectQuery to the Synapse dedicated SQL Pool.
 
 ## Diagram Guide
 
@@ -71,11 +116,17 @@ Use these components in draw.io or Excalidraw.
 - `ADLS Gen2 - Gold`
   Label: `Curated Data`
 
-- `Azure Synapse`
-  Label: `Schema, Views, External Tables`
+- `Azure Synapse Serverless SQL`
+  Label: `Gold Views and External Tables`
 
-- `SQL Consumers`
-  Label: `Analytics / Reporting`
+- `Synapse Dedicated SQL Pool`
+  Label: `dwh_ext* / Star Schema / Stored Procedures`
+
+- `Synapse Pipeline`
+  Label: `Warehouse Load Orchestration`
+
+- `Power BI`
+  Label: `DirectQuery Reporting`
 
 ### Arrows
 
@@ -94,25 +145,33 @@ Use these components in draw.io or Excalidraw.
 - `Azure Databricks` -> `ADLS Gen2 - Gold`
   Label: `Write curated data`
 
-- `ADLS Gen2 - Silver` -> `Azure Synapse`
+- `ADLS Gen2 - Silver` -> `Azure Synapse Serverless SQL`
   Label: `External Parquet access`
 
-- `ADLS Gen2 - Gold` -> `Azure Synapse`
+- `ADLS Gen2 - Gold` -> `Azure Synapse Serverless SQL`
   Label: `External Parquet access`
 
-- `Azure Synapse` -> `SQL Consumers`
-  Label: `Views and external tables`
+- `Azure Synapse Serverless SQL` -> `Synapse Dedicated SQL Pool`
+  Label: `CETAS and external ingestion layer`
+
+- `Synapse Pipeline` -> `Synapse Dedicated SQL Pool`
+  Label: `Stored procedure execution`
+
+- `Synapse Dedicated SQL Pool` -> `Power BI`
+  Label: `DirectQuery reporting`
 
 ## Reuse Notes
 
 To recreate this architecture in another Azure subscription:
 
-- provision the same Azure services
+- provision Azure Data Factory, Databricks, Synapse, and ADLS Gen2
 - create the `bronze`, `silver`, `gold`, and `parameters` containers
 - configure ADF ingestion from GitHub
 - import and run the Databricks notebook
-- execute the Synapse SQL scripts in order
-- validate the gold layer with sample SQL queries
+- create the Synapse serverless views and external tables
+- build the dedicated SQL Pool warehouse objects
+- run the Synapse pipeline or stored procedures for warehouse loads
+- validate the reporting layer and connect Power BI through DirectQuery
 
 ## Security Note
 
